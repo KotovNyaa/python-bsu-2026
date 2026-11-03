@@ -1,0 +1,39 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+data/*.db
+
+# Кэши и виртуальные окружения
+**/.pixi/
+**/.pytest_cache/
+**/.ruff_cache/
+**/__pycache__/
+*.pyc
+
+# Тяжелые сырые данные масс-спектрометрии (>100 МБ)
+**/20240105.tsv
+**/lab.db*
+
+# Сгенерированные бинарные артефакты (воспроизводятся через main.py)
+**/*.parquet
+**/*.npz
+
+# Производные CSV-таблицы (в Git нужны только Extended Data Fig 5.xlsx и pg_matrix.tsv)
+**/cohort_a_426_enriched.csv
+**/cohort_b_*.csv
+**/discovery_*.csv
+**/dataset_features.csv
+**/features_5.csv
+**/metadata.csv
+**/instrumental_evidence.csv
+**/patient_graph_edges.csv
+**/ppi_network_edges.csv
+**/priors_table.csv
+**/protein_priors.csv
+
+# Служебные проверочные скрипты
+**/*audit*.py
