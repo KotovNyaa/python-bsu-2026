@@ -1,7 +1,5 @@
 """Предобработка, нормализация MaxLFQ, гибридная импьютация и межбольничная гармонизация."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import numpy as np
@@ -53,11 +51,7 @@ def polish_anchor_medians(
     df_log2: pd.DataFrame,
     max_missing_rate: float = 0.05,
 ) -> pd.DataFrame:
-    """Выравнивает медианы образцов по якорному инвариантному ядру белков (Anchor Median Polish).
-
-    Ожидает матрицу в log2-шкале (строки — белки, столбцы — образцы),
-    сохраняя все пропуски NaN нетронутыми для последующей гибридной импьютации.
-    """
+    """Выравнивает медианы образцов по якорному инвариантному ядру белков (Anchor Median Polish)."""
     if df_log2.empty:
         return df_log2.copy()
 
@@ -82,10 +76,7 @@ def impute_hybrid_mar_mnar(
     knn_k: int = 5,
     random_seed: int = 42,
 ) -> pd.DataFrame:
-    """Реализует двухэтапную гибридную импьютацию пропусков (MAR -> взвешенный kNN, MNAR -> QRILC).
-
-    Ожидает матрицу размерности (белки x образцы) в log2-шкале после Anchor Median Polish.
-    """
+    """Реализует двухэтапную гибридную импьютацию пропусков (MAR -> взвешенный kNN, MNAR -> QRILC)."""
     if df_log2_norm.empty:
         return df_log2_norm.copy()
 
@@ -129,7 +120,6 @@ def impute_hybrid_mar_mnar(
     tau = float(np.median(finite_dists)) if len(finite_dists) > 0 else 1.0
     tau = max(tau, 1e-3)
 
-    # Шаг 1: Восстановление MAR через взвешенный kNN
     mar_indices = np.where(is_mar_protein.values)[0]
     for p_idx in mar_indices:
         row = vals[p_idx, :]
@@ -149,7 +139,6 @@ def impute_hybrid_mar_mnar(
             else:
                 vals[p_idx, j] = float(np.mean(row[nearest_cols]))
 
-    # Шаг 2: Восстановление оставшихся MNAR-пропусков методом QRILC (Wei et al., 2018)
     rng = np.random.default_rng(random_seed)
     prot_shift = np.clip(
         np.nan_to_num(prot_means.values - global_med, nan=-1.0), -1.5, 0.0
@@ -219,12 +208,7 @@ def align_hospital_baselines_unsupervised(
     df: pd.DataFrame,
     markers: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Устраняет межбольничный приборный сдвиг по нижнему квантильному ядру [Q_0.10, Q_0.55] без меток.
-
-    Поскольку во всех акушерских когортах минимум 67%–91% пациенток принадлежат здоровому фону FTB,
-    интервал квантилей [Q_0.10, Q_0.55] измеряет чистый приборный фон клиники и не зависит
-    от доли случаев sPTB в верхнем хвосте (8.7% в EV1 против 32.9% в Train).
-    """
+    """Устраняет межбольничный приборный сдвиг по нижнему квантильному ядру [Q_0.10, Q_0.55] без меток."""
     if "Dataset" not in df.columns:
         return df
 

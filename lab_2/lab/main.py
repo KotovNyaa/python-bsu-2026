@@ -1,7 +1,5 @@
 """Точка входа полного аналитического, статистического и ML-пайплайна."""
 
-from __future__ import annotations
-
 import pandas as pd
 
 from lab.db import connect, enrich, populate_clinical_cohort, populate_matrix
@@ -45,21 +43,18 @@ def run() -> dict[str, pd.DataFrame]:
     df_markers = load_markers(log_scale=True, align_batches=True)
     markers = ["AMBP", "FN1", "LUM", "TIMP1", "B2M"]
 
-    # 1. Описательная статистика, тест нормальности (до/после log2), категориальный анализ и группировки
     stats_df = describe(df_markers[markers])
     normality_df = compare_normality_raw_vs_log2(df_markers, markers)
     cat_df = describe_categorical(df_markers)
     grouped_df = aggregate_by_groups(df_markers, markers)
     diff_df = diff(df_markers, markers)
 
-    # 2. Полный комплекс визуализации (300 DPI)
     hist_distributions(df_markers, markers)
     categorical_bars(df_markers)
     box(df_markers, markers)
     corr(df_markers, markers)
     volcano(diff_df)
 
-    # 3. Взаимодействие с реляционной БД SQLite и расчет 6D вектора приборных приоров
     with connect() as conn:
         prot_info = pd.read_sql_query("PRAGMA table_info(proteins)", conn)
         if prot_info.empty or not (prot_info["pk"] > 0).any():
@@ -86,7 +81,6 @@ def run() -> dict[str, pd.DataFrame]:
             "fdr_tiers": stratify_fdr_tiers(conn),
         }
 
-    # 4. Обучение моделей, кросс-когортная валидация и адаптация к сдвигу превалентности (Prior Shift)
     train_df = df_markers[df_markers["Dataset"] == "Train"]
     lr_model = train_logistic_regression(train_df, markers)
     rf_model = train_ensemble_model(train_df, markers)
@@ -99,7 +93,6 @@ def run() -> dict[str, pd.DataFrame]:
 
     plot_roc_pr(lr_model, df_markers, markers)
 
-    # 5. Экспорт всех артефактов для локального отчета и запуска на GPU NVIDIA A100
     artifacts = export_ml_artifacts()
 
     return {

@@ -1,7 +1,5 @@
 """Формирование когортных датасетов, побелковая калибровка MS+ELISA и биофизический инжиниринг."""
 
-from __future__ import annotations
-
 import contextlib
 import sqlite3
 from itertools import combinations
@@ -27,7 +25,6 @@ from lab.priors import compute_ms_evidence_vectors
 
 ELISA_VALIDATED_MARKERS = ["AMBP", "FN1", "LUM", "TIMP1"]
 
-# Маппинг когорт на клинические центры согласно дизайну исследования (Zhao et al.)
 DATASET_TO_CENTER = {
     "Train": "MCH1_Shenzhen_Longgang",
     "Internal validation": "MCH1_Shenzhen_Longgang",
@@ -97,7 +94,6 @@ def compute_biophysical_ratios_and_simplex(
     """Вычисляет 10 попарных лог-отношений, 3 композитных индекса, симплекс долей и CLR."""
     out = pd.DataFrame(index=features_log2.index)
 
-    # 1. Все 10 попарных разностей логарифмов (инвариантных к разведению мазка alpha_i)
     ordered_pairs = [
         ("LUM", "TIMP1"),
         ("FN1", "TIMP1"),
@@ -116,12 +112,10 @@ def compute_biophysical_ratios_and_simplex(
                 features_log2[prot_a] - features_log2[prot_b]
             )
 
-    # Если переданы нестандартные имена столбцов, дополняем комбинациями
     if out.empty:
         for c1, c2 in combinations(features_log2.columns, 2):
             out[f"ratio_{c1}_{c2}"] = features_log2[c1] - features_log2[c2]
 
-    # 2. Три главных патофизиологических композитных индекса (answer1.md, п. 1)
     if set(CORE_MARKERS).issubset(features_log2.columns):
         ecm_damage = 0.5 * (features_log2["LUM"] + features_log2["FN1"])
         ecm_defense = 0.5 * (features_log2["TIMP1"] + features_log2["AMBP"])
@@ -129,7 +123,6 @@ def compute_biophysical_ratios_and_simplex(
         out["idx_Subtype_Polarization_SPI"] = features_log2["B2M"] - ecm_damage
         out["idx_Immuno_Proteolytic"] = features_log2["B2M"] - ecm_defense
 
-    # 3. Композиционный профиль на симплексе P_{i,p} и центрированные лог-отношения (CLR)
     linear_signals = np.exp2(features_log2.to_numpy(dtype=np.float64))
     simplex_denom = np.sum(linear_signals, axis=1, keepdims=True)
     simplex_denom = np.where(simplex_denom <= 0, 1.0, simplex_denom)
@@ -169,10 +162,8 @@ def compute_nonlinear_patient_aggregates(
     sd_ftb = np.std(x_ref, axis=0, ddof=1)
     sd_ftb = np.where(sd_ftb < 1e-6, 1.0, sd_ftb)
 
-    # Стандартизованный относительно нормы Train FTB профиль u_{i,p}
     u_mat = (x_mat - mu_ftb[None, :]) / sd_ftb[None, :]
 
-    # 1. Дивергенция Йенсена-Шеннона (Single-Sample JSD) и Кульбака-Лейблера до центроида Q_FTB
     lin_mat = np.exp2(x_mat)
     p_mat = lin_mat / np.maximum(np.sum(lin_mat, axis=1, keepdims=True), 1e-12)
     p_mat = np.clip(p_mat, 1e-12, 1.0)
@@ -193,13 +184,11 @@ def compute_nonlinear_patient_aggregates(
         p_mat * np.log2(p_mat / q_ftb[None, :]), axis=1
     )
 
-    # 2. Энтропия Шеннона, перплексия и индекс одиночного триггера
     shannon_h = -np.sum(p_mat * np.log2(p_mat), axis=1)
     out["nonlin_Shannon_Entropy"] = shannon_h
     out["nonlin_Perplexity"] = np.exp2(shannon_h)
     out["nonlin_Single_Trigger_Peak"] = np.max(u_mat, axis=1) - np.median(u_mat, axis=1)
 
-    # 3. Расстояние Махаланобиса (Ledoit-Wolf) и квадратичная форма потери связности (Decoupling Score)
     lw = LedoitWolf().fit(x_ref)
     precision_mat = lw.precision_
     diag_prec = np.diag(np.diag(precision_mat))
@@ -213,7 +202,6 @@ def compute_nonlinear_patient_aggregates(
     out["nonlin_Mahalanobis_Dist"] = np.sqrt(np.maximum(mahal_sq, 0.0))
     out["nonlin_Decoupling_Score"] = decoupling
 
-    # 4. Суммарная протеомная нагрузка, гладкий максимум LogSumExp и внутрипациентская дисперсия
     out["nonlin_Total_Burden"] = np.mean(u_mat, axis=1)
     max_u = np.max(u_mat / tau, axis=1, keepdims=True)
     lse_vals = tau * (
@@ -231,14 +219,9 @@ def calibrate_ms_elisa_cross_platform(
     metadata: pd.DataFrame,
     df_elisa_paired: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Выполняет побелковую калибровку и денойзинг MS -> ELISA строго по Train без глобального dropna.
-
-    Учитывает Ограничение #2: в листе 5d у 50 пациенток (включая 4 в Train) измерены не все 4 белка,
-    поэтому регрессии обучаются независимо для каждого белка p ∈ {AMBP, FN1, LUM, TIMP1}.
-    """
+    """Выполняет побелковую калибровку и денойзинг MS -> ELISA строго по Train без глобального dropna."""
     out = pd.DataFrame(index=features_log2.index)
 
-    # Расширенная матрица предикторов MS (5 маркеров + 10 попарных лог-отношений) для многомерного денойзинга
     ratios_df = compute_biophysical_ratios_and_simplex(features_log2)
     ratio_cols = [c for c in ratios_df.columns if c.startswith("ratio_")]
     x_full_ms = pd.concat([features_log2[CORE_MARKERS], ratios_df[ratio_cols]], axis=1)
@@ -261,7 +244,6 @@ def calibrate_ms_elisa_cross_platform(
         sub_p = df_5d_train[df_5d_train["Protein"] == prot].dropna(
             subset=["log2(MS signal)", "log2(ELISA)"]
         )
-        # Убираем дубликаты Sample ID внутри одного белка, если есть
         sub_p = sub_p.drop_duplicates(subset=["Sample ID"], keep="first")
         valid_sample_ids = [
             sid for sid in sub_p["Sample ID"].astype(str) if sid in x_full_ms.index
@@ -272,14 +254,12 @@ def calibrate_ms_elisa_cross_platform(
             x_tr_uni = sub_p["log2(MS signal)"].to_numpy(dtype=np.float64)
             z_tr_elisa = sub_p["log2(ELISA)"].to_numpy(dtype=np.float64)
 
-            # 1. Робастная одномерная калибровочная кривая Huber: log2(ELISA) ~ log2(MS)
             huber = HuberRegressor(max_iter=500).fit(
                 x_tr_uni.reshape(-1, 1), z_tr_elisa
             )
             z_hat_uni_tr = huber.predict(x_tr_uni.reshape(-1, 1))
             residuals_sq = (z_tr_elisa - z_hat_uni_tr) ** 2
 
-            # 2. Полиномиальная оценка функции гетероскедастической дисперсии ошибки sigma_p^2(x)
             poly_tr = np.column_stack([x_tr_uni, x_tr_uni**2])
             poly_all = np.column_stack([x_prot_all, x_prot_all**2])
             var_reg = RidgeCV(alphas=np.logspace(-2, 3, 15)).fit(
@@ -287,7 +267,6 @@ def calibrate_ms_elisa_cross_platform(
             )
             sigma_sq_all = np.clip(np.exp(var_reg.predict(poly_all)), 0.05, 10.0)
 
-            # 3. Многомерная Ridge-регрессия денойзинга MS -> ELISA со сжатием к монотонной кривой Хубера
             z_hat_uni_all = huber.predict(x_prot_all.reshape(-1, 1))
             x_tr_multi = x_full_ms.loc[valid_sample_ids].to_numpy(dtype=np.float64)
             denoiser = RidgeCV(alphas=np.logspace(0, 4, 20)).fit(
@@ -296,7 +275,6 @@ def calibrate_ms_elisa_cross_platform(
             z_multi_corr = denoiser.predict(x_full_ms.to_numpy(dtype=np.float64))
             z_denoised_all = z_hat_uni_all + 0.25 * z_multi_corr
 
-            # 4. Сохранение стандартизованных невязок для оценки индивидуального сдвига пробоподготовки delta_i
             x_std_tr = (x_tr_uni - np.mean(x_tr_uni)) / max(
                 float(np.std(x_tr_uni)), 1e-6
             )
@@ -312,7 +290,6 @@ def calibrate_ms_elisa_cross_platform(
         out[f"elisa_reliability_{prot}"] = np.round(1.0 / sigma_sq_all, 4)
         sigma_sq_cols.append(sigma_sq_all)
 
-    # 5. Латентная калибровка 5-го маркера B2M через среднюю техническую ошибку образца (без глобального dropna!)
     mean_shift_per_train = shift_matrix_train.mean(axis=1, skipna=True).dropna()
     b2m_train_vals = features_log2.loc[metadata["Dataset"] == "Train", "B2M"].to_numpy(
         dtype=np.float64
@@ -336,7 +313,6 @@ def calibrate_ms_elisa_cross_platform(
     out["elisa_tech_shift_delta"] = delta_hat_all
     out["elisa_denoised_B2M"] = b2m_z_all - delta_hat_all
 
-    # 6. Интегральный вес достоверности пациентки W_i (нормированный на среднее 1.0 в Train)
     mean_sigma_sq = np.mean(np.column_stack(sigma_sq_cols), axis=1)
     raw_sample_w = 1.0 / np.maximum(mean_sigma_sq, 0.05)
     train_mask = (metadata["Dataset"] == "Train").to_numpy(dtype=bool)
@@ -399,10 +375,7 @@ def extract_instrumental_evidence(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def extract_discovery_wide(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Извлекает широкую матрицу экспрессии белков Чунцина (35 x 2699) по протоколу MaxLFQ + QRILC.
-
-    Сохраняет все 48 белков с пустым Genes через Genes.fillna(Protein_Group) (Ограничение #3).
-    """
+    """Извлекает широкую матрицу экспрессии белков Чунцина (35 x 2699) по протоколу MaxLFQ + QRILC."""
     df_prot = pd.read_sql_query("SELECT * FROM proteins;", conn)
     if df_prot.empty:
         return pd.DataFrame()

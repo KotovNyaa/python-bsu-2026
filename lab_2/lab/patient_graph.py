@@ -1,7 +1,5 @@
 """Индуктивный мульти-модальный граф пациенток (TabR/TAG/GraphPFN) и LOD-импьютация (Блок Б)."""
 
-from __future__ import annotations
-
 import contextlib
 import sqlite3
 from pathlib import Path
@@ -43,7 +41,6 @@ def _compute_simplex(x_log2: np.ndarray) -> np.ndarray:
 
 def _pairwise_jsd_distance(p_all: np.ndarray, p_ref: np.ndarray) -> np.ndarray:
     """Векторизованно вычисляет матрицу метрических расстояний Йенсена-Шеннона d_JS(P_i, P_j)."""
-    # p_all: (N, D), p_ref: (M, D) -> результат (N, M)
     p_i = p_all[:, None, :]
     p_j = p_ref[None, :, :]
     m_ij = 0.5 * (p_i + p_j)
@@ -63,7 +60,6 @@ def _pairwise_clr_cosine_distance(x_all: np.ndarray, x_ref: np.ndarray) -> np.nd
 
     cos_sim = (clr_all / norm_all) @ (clr_ref / norm_ref).T
     cos_sim = np.clip(cos_sim, -1.0, 1.0)
-    # Защита от машинной погрешности 1 - 1.0 = -1e-16 для диагонали
     dist_sq = np.maximum(0.0, 1.0 - cos_sim)
     dist_sq[dist_sq < 1e-14] = 0.0
     return np.sqrt(dist_sq)
@@ -87,12 +83,7 @@ def build_patient_knn_graph(
     k_neighbors: int = 8,
     metric: str = "euclidean",
 ) -> pd.DataFrame:
-    """Строит строго индуктивный мульти-модальный граф пациенток (Candidate Set Restriction).
-
-    Все параметры стандартизации и ковариации оцениваются исключительно на множестве Train (n=82).
-    Каждая пациентка i формирует ребра только к опорным пациенткам из Train \\ {i},
-    что полностью исключает трансдуктивную утечку данных между клиниками (0 ребер в тест).
-    """
+    """Строит строго индуктивный мульти-модальный граф пациенток (Candidate Set Restriction)."""
     sample_ids = features_df.index.astype(str).tolist()
     n_samples = len(sample_ids)
     if n_samples == 0:
@@ -100,7 +91,6 @@ def build_patient_knn_graph(
 
     x_log2 = _to_log2_if_needed(features_df)
 
-    # 1. Выделение опорного пула кандидатов I_cand = V_train (Candidate Set Restriction из TabR)
     if "Dataset" in metadata_df.columns:
         ds_series = metadata_df.reindex(features_df.index)["Dataset"].astype(str)
         train_mask = (ds_series == "Train").to_numpy(dtype=bool)
@@ -109,12 +99,10 @@ def build_patient_knn_graph(
 
     ref_indices = np.where(train_mask)[0]
     if len(ref_indices) <= k_neighbors:
-        # Fallback для малых синтетических таблиц в юнит-тестах
         ref_indices = np.arange(n_samples)
 
     x_ref = x_log2[ref_indices]
 
-    # 2. Изоляция статистик препроцессинга строго на опорном множестве Train
     scaler = StandardScaler().fit(x_ref)
     x_scaled_all = scaler.transform(x_log2)
     x_scaled_ref = x_scaled_all[ref_indices]
@@ -122,7 +110,6 @@ def build_patient_knn_graph(
     lw = LedoitWolf().fit(x_scaled_ref)
     prec_mat = lw.precision_
 
-    # 3. Расчет 3 ортогональных модальностей расстояния относительно узлов Train
     p_all = _compute_simplex(x_log2)
     p_ref = p_all[ref_indices]
 
@@ -135,7 +122,6 @@ def build_patient_knn_graph(
     elif metric == "jsd":
         d_primary = d_jsd.copy()
     else:
-        # Мульти-модальное ядро (JSD + CLR-Cosine + Mahalanobis), устойчивое к батч-эффекту
         med_jsd = max(float(np.median(d_jsd[d_jsd > 0])), 1e-4)
         med_clr = max(float(np.median(d_clr[d_clr > 0])), 1e-4)
         med_mah = max(float(np.median(d_mahal[d_mahal > 0])), 1e-4)
@@ -145,7 +131,6 @@ def build_patient_knn_graph(
             + 0.30 * (d_mahal / med_mah)
         )
 
-    # Исключаем самокопирование для узлов из Train: i ∉ I_cand(i)
     ref_pos_map = {int(global_idx): pos for pos, global_idx in enumerate(ref_indices)}
     d_search = d_primary.copy()
     for i in range(n_samples):
@@ -155,7 +140,6 @@ def build_patient_knn_graph(
     k_eff = min(k_neighbors, max(len(ref_indices) - 1, 1))
     part_idx = np.argsort(d_search, axis=1)[:, :k_eff]
 
-    # Локальные масштабы Self-Tuning RBF ядра по k-му соседу из Train
     kth_dists = np.array(
         [d_primary[i, part_idx[i, -1]] for i in range(n_samples)], dtype=np.float64
     )
@@ -255,7 +239,6 @@ def _build_inductive_transition_matrix(
     if tau_fixed is not None and tau_fixed > 0:
         tau = tau_fixed
     else:
-        # Считаем масштаб ядра ТОЛЬКО по опорным узлам Train (гарантия 100% индуктивной изоляции)
         train_rows = [i for i in range(n_all) if i in ref_pos_map]
         train_dists = d_work[train_rows, :] if train_rows else d_work
         finite_vals = train_dists[np.isfinite(train_dists) & (train_dists > 0)]
@@ -318,16 +301,13 @@ def compute_inductive_tag_tabr_features(
     _, a_clr = _build_inductive_transition_matrix(d_clr, ref_pos_map, k_neighbors)
     _, a_mah = _build_inductive_transition_matrix(d_mah, ref_pos_map, k_neighbors)
 
-    # Комбинированный оператор перехода по 3 модальностям графа
     a_comb = (a_jsd + a_clr + a_mah) / 3.0
-    a_comb_tr = a_comb[ref_indices, :]  # (N_ref x N_ref) внутри Train
+    a_comb_tr = a_comb[ref_indices, :]
 
-    # 1. 1-hop и 2-hop сглаженные признаки соседей из Train (TAG: phi^(1) и phi^(2))
-    phi_1 = a_comb @ x_ref  # (N x D)
-    phi_1_tr = a_comb_tr @ x_ref  # (N_ref x D)
-    phi_2 = a_comb @ phi_1_tr  # (N x D)
+    phi_1 = a_comb @ x_ref
+    phi_1_tr = a_comb_tr @ x_ref
+    phi_2 = a_comb @ phi_1_tr
 
-    # 2. Дирекциональные разностные признаки TabR: Delta^(1) = x_i - phi_i^(1)
     delta_1 = x_log2 - phi_1
 
     for idx, col in enumerate(features_df.columns):
@@ -335,13 +315,11 @@ def compute_inductive_tag_tabr_features(
         out[f"graph_tag_hop2_{col}"] = phi_2[:, idx]
         out[f"graph_tabr_delta1_{col}"] = delta_1[:, idx]
 
-    # 3. Leave-One-Out сглаживание меток соседей по каждой модальности (G2T-FM Local Label Smoothing)
     out["graph_knn_label_jsd"] = a_jsd @ y_ref
     out["graph_knn_label_clr"] = a_clr @ y_ref
     out["graph_knn_label_mahal"] = a_mah @ y_ref
     out["graph_knn_label_consensus"] = a_comb @ y_ref
 
-    # 4. Классово-специфичные расстояния до k=5 ближайших прототипов Train-FTB и Train-sPTB
     ftb_ref_cols = np.where(y_ref == 0)[0]
     ptb_ref_cols = np.where(y_ref == 1)[0]
     k_proto = 5
@@ -374,7 +352,6 @@ def compute_inductive_tag_tabr_features(
             (mean_ftb + 1e-4) / (mean_ptb + 1e-4)
         )
 
-    # 5. Структурные дескрипторы локальной плотности и энтропии внимания
     out["graph_local_density"] = np.mean(w_jsd, axis=1)
     p_att = np.clip(a_comb, 1e-12, 1.0)
     out["graph_attention_entropy"] = -np.sum(p_att * np.log2(p_att), axis=1)
@@ -388,12 +365,7 @@ def build_graphpfn_node_encodings(
     discovery_b_df: pd.DataFrame | None = None,
     k_neighbors: int = 8,
 ) -> pd.DataFrame:
-    """Формирует единую таблицу позиционных и структурных кодировок узлов (426 + 35 = 461 строка).
-
-    Включает Laplacian Eigenvector PE (с индуктивной интерполяцией Нистрёма),
-    Random Walk Structural Encoding (RWSE), персонализированный PageRank и диффузионные представления
-    для подачи всех 461 пациенток в единое окно In-Context Learning моделей TabPFN-2.5 / TabICLv2 / GraphPFN.
-    """
+    """Формирует единую таблицу позиционных и структурных кодировок узлов (426 + 35 = 461 строка)."""
     x_a_log2 = pd.DataFrame(
         _to_log2_if_needed(features_a_df),
         index=features_a_df.index.astype(str),
@@ -402,7 +374,6 @@ def build_graphpfn_node_encodings(
     ds_a = metadata_a_df.reindex(x_a_log2.index)["Dataset"].astype(str)
     y_a = metadata_a_df.reindex(x_a_log2.index)["Target"].fillna(-1).astype(int)
 
-    # Если передана матрица Чунцина (35 пациенток), квантильно выравниваем 4 общих маркера (Rank-Gauss)
     shared_cols = [c for c in SHARED_4_MARKERS if c in x_a_log2.columns]
     train_mask_a = (ds_a == "Train").to_numpy(dtype=bool)
     if not np.any(train_mask_a):
@@ -428,7 +399,6 @@ def build_graphpfn_node_encodings(
             quantiles = (ranks - 0.5) / max(len(ranks), 1)
             b_aligned[col] = np.quantile(ref_vals, np.clip(quantiles, 0.01, 0.99))
 
-        # Импьютация 5-го маркера TIMP1 для Чунцина через Ridge по 4 общим маркерам на Train
         if "TIMP1" in x_a_log2.columns:
             x_tr_4 = x_a_log2.loc[train_mask_a, shared_cols].to_numpy(dtype=np.float64)
             y_tr_timp = x_a_log2.loc[train_mask_a, "TIMP1"].to_numpy(dtype=np.float64)
@@ -478,9 +448,8 @@ def build_graphpfn_node_encodings(
     w_mah, a_mah = _build_inductive_transition_matrix(d_mah, ref_pos_map, k_neighbors)
 
     a_comb = (a_jsd + a_clr + a_mah) / 3.0
-    a_tr = a_comb[ref_indices, :]  # (N_ref x N_ref)
+    a_tr = a_comb[ref_indices, :]
 
-    # 1. Индуктивная проекция Нистрёма собственных векторов Лапласиана L_tr (LaplacianEigenvectorPE)
     w_tr_sym = (
         0.5
         * (
@@ -498,21 +467,18 @@ def build_graphpfn_node_encodings(
     lap_tr = np.eye(n_ref) - d_inv_sqrt @ w_tr_sym @ d_inv_sqrt
 
     eigvals, eigvecs = np.linalg.eigh(lap_tr)
-    # Берем первые 12 нетривиальных собственных векторов (пропуская нулевую моду)
     n_eigs = min(12, max(n_ref - 1, 1))
     psi_tr = eigvecs[:, 1 : 1 + n_eigs]
     lam_tr = np.maximum(eigvals[1 : 1 + n_eigs], 1e-4)
-    # Проекция Нистрёма для всех 461 узлов через переходную матрицу a_comb
     psi_nystrom = (a_comb @ psi_tr) / lam_tr[None, :]
 
-    # 2. Random Walk Structural Encoding (RWSE) — вероятности и моменты блужданий шагов s = 1..6
     a_tr_powers = [np.eye(n_ref)]
     for _ in range(6):
         a_tr_powers.append(a_tr_powers[-1] @ a_tr)
 
     rw_features: dict[str, np.ndarray] = {}
     for step_s in range(1, 7):
-        prop_mat = a_comb @ a_tr_powers[step_s - 1]  # (N_total x N_ref)
+        prop_mat = a_comb @ a_tr_powers[step_s - 1]
         rw_features[f"rwse_step{step_s}_max_prob"] = np.max(prop_mat, axis=1)
         rw_features[f"rwse_step{step_s}_Concentration"] = np.sum(prop_mat**2, axis=1)
         rw_features[f"rwse_step{step_s}_entropy"] = -np.sum(
@@ -525,11 +491,10 @@ def build_graphpfn_node_encodings(
         prop_mat = prop_mat / np.maximum(np.sum(prop_mat, axis=1, keepdims=True), 1e-12)
         rw_features[f"rwse_step{step_s}_risk_diffusion"] = prop_mat @ y_ref
 
-    # 3. Персонализированный PageRank (PPR) относительно узлов Train (alpha = 0.15)
     alpha_ppr = 0.15
     ppr_kernel_tr = alpha_ppr * np.linalg.inv(np.eye(n_ref) - (1.0 - alpha_ppr) * a_tr)
-    ppr_all_to_tr = a_comb @ ppr_kernel_tr  # (N_total x N_ref)
-    ppr_x_diffused = ppr_all_to_tr @ x_s_ref  # (N_total x 5)
+    ppr_all_to_tr = a_comb @ ppr_kernel_tr
+    ppr_x_diffused = ppr_all_to_tr @ x_s_ref
     ppr_tr_block = ppr_all_to_tr[ref_indices, :].copy()
     np.fill_diagonal(ppr_tr_block, 0.0)
     ppr_all_to_tr[ref_indices, :] = ppr_tr_block
@@ -537,7 +502,6 @@ def build_graphpfn_node_encodings(
         np.sum(ppr_all_to_tr, axis=1, keepdims=True), 1e-12
     )
     ppr_y_diffused = ppr_all_to_tr @ y_ref
-    # 4. Многошаговые диффузионные представления по каждой из 3 модальностей (JSD, CLR, Mahal)
     enc_cols: dict[str, Any] = {
         "Cohort": cohort_labels,
         "Target": target_labels,
@@ -575,11 +539,7 @@ def impute_proteomics_lod(
     scale: float = 0.3,
     random_seed: int = 42,
 ) -> pd.DataFrame:
-    """Реализует протеомную импьютацию цензурированных пределов детекции (Left-Censored LOD).
-
-    Заполняет NaN случайными величинами из левого хвоста распределения шума прибора:
-    N(mu - shift * sigma, scale * sigma).
-    """
+    """Реализует протеомную импьютацию цензурированных пределов детекции (Left-Censored LOD)."""
     rng = np.random.default_rng(random_seed)
     df_imputed = df_wide.copy().astype(np.float64)
     vals = df_imputed.to_numpy(dtype=np.float64, copy=True)
@@ -631,13 +591,10 @@ def run_block_b(
     metadata_df = pd.read_parquet(root / "metadata.parquet")
     discovery_wide = pd.read_parquet(root / "discovery_wide.parquet")
 
-    # 1. Построение строго индуктивного графа пациенток без утечек в тест
     graph_df = build_patient_knn_graph(
         features_df, metadata_df, k_neighbors=8, metric="euclidean"
     )
 
-    # 2. Протеомная LOD-импьютация широкой матрицы Чунцина по реальным позициям пропусков NaN
-    # (исправление Бага #1 из audit.py, где discovery_wide не содержал NaN на входе)
     unimputed_path = root / "discovery_unimputed.parquet"
     mask_path = root / "discovery_missing_mask.parquet"
     if unimputed_path.is_file():

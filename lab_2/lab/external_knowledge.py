@@ -1,7 +1,5 @@
 """Интеграция внешних знаний: мультиплексный граф коэкспрессии + STRING, 6 путей и маски BINN (Блоки В и Г)."""
 
-from __future__ import annotations
-
 import contextlib
 import hashlib
 import json
@@ -25,7 +23,6 @@ from lab.priors import (
 )
 from lab.stats import adjust_fdr
 
-# Сохраняем алиас для полной обратной совместимости с тестами
 CURATED_UNIPROT_KNOWLEDGE: dict[str, dict[str, Any]] = BIOPHYSICAL_PRIORS
 
 MACRO_PATHWAYS_6 = [
@@ -37,7 +34,6 @@ MACRO_PATHWAYS_6 = [
     "Zn_Cu_Targets",
 ]
 
-# Априорная матрица биофизической привязки 5 ядерных маркеров к 6 макро-путям статьи Zhao et al.
 PRIOR_MARKER_PATHWAY_AFFINITY: dict[str, dict[str, float]] = {
     "LUM": {
         "ECM_Remodeling": 0.95,
@@ -69,7 +65,7 @@ PRIOR_MARKER_PATHWAY_AFFINITY: dict[str, dict[str, float]] = {
         "Fibrinolysis_Coagulation": 0.65,
         "Immune_Inflammation": 0.50,
         "Energy_Metabolism_ATP": 0.30,
-        "Zn_Cu_Targets": 0.88,  # MMP — цинк-зависимые эндопептидазы!
+        "Zn_Cu_Targets": 0.88,
     },
     "B2M": {
         "ECM_Remodeling": 0.25,
@@ -129,7 +125,6 @@ def fetch_string_ppi_network(
     if df_edges.empty:
         return generate_deterministic_ppi_fallback(genes)
 
-    # Дополняем гарантированными ребрами для TIMP1 и ключевых каскадов, если API вернул неполный подграф
     fallback_df = generate_deterministic_ppi_fallback(genes)
     combined = pd.concat([df_edges, fallback_df], ignore_index=True)
     combined = combined.drop_duplicates(
@@ -141,7 +136,6 @@ def fetch_string_ppi_network(
 def generate_deterministic_ppi_fallback(genes: list[str]) -> pd.DataFrame:
     """Автономная референсная сеть взаимодействий STRING v12.0 между маркерами всех 6 путей статьи."""
     canonical_edges = [
-        # Ядерный модуль ремоделирования матрикса (ECM) и мост для TIMP1
         ("FN1", "LUM", 0.812, 0.720, 0.900, 0.450),
         ("FN1", "TIMP1", 0.765, 0.650, 0.850, 0.380),
         ("LUM", "TIMP1", 0.680, 0.540, 0.700, 0.320),
@@ -152,23 +146,19 @@ def generate_deterministic_ppi_fallback(genes: list[str]) -> pd.DataFrame:
         ("TIMP1", "THBS1", 0.710, 0.550, 0.750, 0.310),
         ("AMBP", "FN1", 0.520, 0.410, 0.500, 0.280),
         ("AMBP", "TIMP1", 0.480, 0.350, 0.500, 0.250),
-        # Модуль комплемента (C3, C4A, CFH)
         ("C3", "C4A", 0.990, 0.960, 0.990, 0.750),
         ("C3", "CFH", 0.999, 0.990, 0.990, 0.820),
         ("C4A", "CFH", 0.920, 0.810, 0.900, 0.680),
         ("C3", "FN1", 0.640, 0.520, 0.600, 0.330),
-        # Модуль фибринолиза и коагуляции (PLG, HRG, SERPINA1)
         ("PLG", "FN1", 0.954, 0.870, 0.950, 0.580),
         ("PLG", "HRG", 0.945, 0.860, 0.920, 0.610),
         ("PLG", "SERPINA1", 0.910, 0.780, 0.900, 0.640),
         ("SERPINA1", "TIMP1", 0.690, 0.510, 0.720, 0.370),
         ("SERPINA1", "AMBP", 0.740, 0.580, 0.750, 0.490),
-        # Модуль иммунитета и воспаления (B2M, PRG2, ZG16B, A1BG)
         ("FN1", "B2M", 0.450, 0.350, 0.400, 0.210),
         ("B2M", "C3", 0.580, 0.440, 0.550, 0.310),
         ("B2M", "PRG2", 0.510, 0.390, 0.480, 0.290),
         ("A1BG", "SERPINA1", 0.780, 0.610, 0.750, 0.550),
-        # Модуль мишеней цинка и меди (ALB, GC, TF, SOD1)
         ("C3", "ALB", 0.620, 0.510, 0.600, 0.340),
         ("ALB", "FN1", 0.850, 0.740, 0.800, 0.520),
         ("ALB", "GC", 0.930, 0.820, 0.900, 0.710),
@@ -214,11 +204,7 @@ def build_protein_multiplex_graph(
     fdr_thresh: float = 0.05,
     random_seed: int = 42,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Строит мультиплексный граф коэкспрессии Чунцина (бутстреп B=1000) и взаимодействий STRING v12.0.
-
-    Реализует быстрый BLAS-векторизованный расчет ранговой корреляции Спирмена (Нюанс 4 из answers_rewiew.md).
-    Интегрирует 2 699 белков Чунцина + узел TIMP1 в единое графовое представление.
-    """
+    """Строит мультиплексный граф коэкспрессии Чунцина (бутстреп B=1000) и взаимодействий STRING v12.0."""
     chongqing_genes = discovery_df.columns.astype(str).tolist()
     all_nodes = list(dict.fromkeys([*chongqing_genes, "TIMP1"]))
     node_to_idx = {g: idx for idx, g in enumerate(all_nodes)}
@@ -226,7 +212,6 @@ def build_protein_multiplex_graph(
     n_samples, _n_prot = discovery_df.shape
     x_mat = discovery_df.to_numpy(dtype=np.float64)
 
-    # 1. Быстрое вычисление полной матрицы ранговой корреляции Спирмена через BLAS (R.T @ R)
     ranks = np.apply_along_axis(stats.rankdata, 0, x_mat).astype(np.float64)
     ranks_centered = ranks - np.mean(ranks, axis=0, keepdims=True)
     norms = np.maximum(np.linalg.norm(ranks_centered, axis=0, keepdims=True), 1e-12)
@@ -234,9 +219,7 @@ def build_protein_multiplex_graph(
     corr_full = np.clip(r_unit.T @ r_unit, -0.999999, 0.999999)
     np.fill_diagonal(corr_full, 0.0)
 
-    # 2. Двусторонний t-тест и коррекция Бенджамини-Хохберга (BH FDR)
     dof = max(n_samples - 2, 1)
-    # Отбираем для бутстреп-верификации пары, связанные с путевыми маркерами или превышающие порог |r| > r_thresh
     pathway_mask = np.array(
         [
             classify_gene_pathway_and_location(g)[0] != "Other_Proteome"
@@ -245,7 +228,6 @@ def build_protein_multiplex_graph(
         ],
         dtype=bool,
     )
-    # Дополнительно включаем топ-250 наиболее вариабельных белков Чунцина
     var_order = np.argsort(np.var(x_mat, axis=0))[::-1][:250]
     active_mask = pathway_mask.copy()
     active_mask[var_order] = True
@@ -265,13 +247,11 @@ def build_protein_multiplex_graph(
     cand_p_adj = p_adj[cand_mask]
     cand_r_obs = r_vals[cand_mask]
 
-    # 3. Векторизованный бутстреп (B = 1000 итераций) на отобранных кандидатных парах
     rng = np.random.default_rng(random_seed)
-    ranks_active = ranks[:, active_idx]  # (35, M_active)
+    ranks_active = ranks[:, active_idx]
     boot_medians = np.abs(cand_r_obs).copy()
 
     if len(cand_r) > 0 and n_bootstrap > 0:
-        # Ограничиваем до топ-4000 сильнейших пар для мгновенной бутстреп-оценки медианы
         if len(cand_r) > 4000:
             top_order = np.argsort(np.abs(cand_r_obs))[::-1][:4000]
             cand_r = cand_r[top_order]
@@ -319,7 +299,6 @@ def build_protein_multiplex_graph(
             "string_db_score": 0.0,
         }
 
-    # 4. Наложение физических и регуляторных каналов STRING v12.0 (включая TIMP1)
     for _, srow in string_edges_df.iterrows():
         s_a = str(srow["source_gene"])
         s_b = str(srow["target_gene"])
@@ -335,7 +314,6 @@ def build_protein_multiplex_graph(
             edge_records[key]["string_exp_score"] = round(exp_s, 4)
             edge_records[key]["string_db_score"] = round(db_s, 4)
         else:
-            # Для пар из STRING (или TIMP1), если оба белка есть в Чунцине, берем их эмпирическую r
             if key[0] in discovery_df.columns and key[1] in discovery_df.columns:
                 emp_r = float(
                     corr_full[
@@ -370,7 +348,6 @@ def build_protein_multiplex_graph(
         multiplex_df["source_idx"] = multiplex_df["source_gene"].map(node_to_idx)
         multiplex_df["target_idx"] = multiplex_df["target_gene"].map(node_to_idx)
 
-    # Тензорное представление для сохранения в protein_multiplex_graph.npz
     if not multiplex_df.empty:
         src_arr = multiplex_df["source_idx"].to_numpy(dtype=np.int64)
         tgt_arr = multiplex_df["target_idx"].to_numpy(dtype=np.int64)
@@ -405,11 +382,7 @@ def compute_pathway_context_features(
     multiplex_edges_df: pd.DataFrame,
     tau: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Извлекает 24-мерный контекстный профиль 6 макро-путей Z (5x24) и нелинейные проекции для 426 пациенток.
-
-    Реализует полноранговые нелинейные путевые операторы (LogSumExp, взвешенная дисперсия,
-    RWR-проводимость и межпутевые балансы — Нюанс 2 из answers_rewiew.md).
-    """
+    """Извлекает 24-мерный контекстный профиль 6 макро-путей Z (5x24) и нелинейные проекции для 426 пациенток."""
     chongqing_genes = discovery_b_df.columns.astype(str).tolist()
     pathway_to_genes: dict[str, list[str]] = {pw: [] for pw in MACRO_PATHWAYS_6}
     for g in chongqing_genes:
@@ -417,7 +390,6 @@ def compute_pathway_context_features(
         if pw in pathway_to_genes:
             pathway_to_genes[pw].append(g)
 
-    # Разделение 35 образцов Чунцина на FTB-like (низкая JSD) и sPTB2-like (высокая JSD) для оценки Delta Deg
     x_b_mat = discovery_b_df.to_numpy(dtype=np.float64)
     x_b_z = (x_b_mat - np.mean(x_b_mat, axis=0, keepdims=True)) / np.maximum(
         np.std(x_b_mat, axis=0, ddof=1, keepdims=True), 1e-6
@@ -434,7 +406,6 @@ def compute_pathway_context_features(
     low_jsd_mask = jsd_b <= np.median(jsd_b)
     high_jsd_mask = ~low_jsd_mask
 
-    # 1. Формирование матрицы контекстных эмбеддингов Z (5 маркеров x 24 топологических признака 6 путей)
     z_rows: list[dict[str, float]] = []
     affinity_mat = np.zeros(
         (len(CORE_MARKERS), len(MACRO_PATHWAYS_6)), dtype=np.float64
@@ -471,7 +442,6 @@ def compute_pathway_context_features(
                 mean_coexp = prior_aff * 0.65
                 max_coexp = prior_aff
 
-            # RWR-проводимость и дифференциальная связность между sPTB2-like и FTB-like образцами
             rwr_cond = 0.55 * prior_aff + 0.45 * mean_coexp
             if (
                 marker in discovery_b_df.columns
@@ -514,12 +484,10 @@ def compute_pathway_context_features(
 
     z_df = pd.DataFrame(z_rows, index=CORE_MARKERS)
 
-    # Нормируем столбцы матрицы проводимости W (5 x 6) для нелинейных путевых операторов
     w_norm = affinity_mat / np.maximum(
         np.sum(affinity_mat, axis=0, keepdims=True), 1e-8
     )
 
-    # 2. Стандартизация экспрессии 426 пациенток относительно нормы Train FTB (n=55)
     x_mat = features_a_log2[CORE_MARKERS].to_numpy(dtype=np.float64)
     ftb_mask = (
         (metadata_a["Dataset"] == "Train") & (metadata_a["Target"] == 0)
@@ -529,14 +497,12 @@ def compute_pathway_context_features(
 
     mu_ref = np.mean(x_mat[ftb_mask], axis=0, keepdims=True)
     sd_ref = np.maximum(np.std(x_mat[ftb_mask], axis=0, ddof=1, keepdims=True), 1e-6)
-    u_mat = (x_mat - mu_ref) / sd_ref  # (426 x 5)
+    u_mat = (x_mat - mu_ref) / sd_ref
 
-    # 3. Расчет 24 нелинейных полноранговых признаков активности 6 биологических путей
     pw_feats = pd.DataFrame(index=features_a_log2.index)
 
     for p_idx, pw in enumerate(MACRO_PATHWAYS_6):
-        w_col = w_norm[:, p_idx]  # (5,)
-        # Оператор 1: Нелинейная пиковая активация пути (Pathway LogSumExp)
+        w_col = w_norm[:, p_idx]
         scaled_u = u_mat / tau + np.log(np.maximum(w_col[None, :], 1e-6))
         max_s = np.max(scaled_u, axis=1, keepdims=True)
         pw_lse = tau * (
@@ -544,16 +510,13 @@ def compute_pathway_context_features(
         )
         pw_feats[f"pathway_lse_{pw}"] = pw_lse
 
-        # Оператор 2: Внутрипутевая взвешенная дискордантность (Pathway Weighted Variance)
         pw_mean = u_mat @ w_col
         pw_var = np.sum(w_col[None, :] * ((u_mat - pw_mean[:, None]) ** 2), axis=1)
         pw_feats[f"pathway_discordance_{pw}"] = pw_var
 
-        # Оператор 3: Квадратичная энергия синергии маркеров внутри пути (Gated Synergy Energy)
         softplus_u = np.log1p(np.exp(np.clip(u_mat, -15.0, 15.0)))
         pw_feats[f"pathway_synergy_{pw}"] = (softplus_u**2) @ w_col
 
-    # Оператор 4: 6 межпутевых антагонистических балансов (Cross-Pathway Ratios)
     pw_feats["pathway_balance_Complement_vs_ECM"] = (
         pw_feats["pathway_lse_Complement_Cascade"]
         - pw_feats["pathway_lse_ECM_Remodeling"]
@@ -592,18 +555,10 @@ def build_binn_hierarchy_masks(
     n_layer2: int = 120,
     n_layer3: int = 35,
 ) -> tuple[dict[str, np.ndarray], pd.DataFrame]:
-    """Генерирует 4-уровневые разреженные булевы маски иерархии путей для BINN / P-NET и DeepSHAP.
-
-    Слои иерархии (по протоколу Hartman 2023 / Elmarakeby 2021):
-      - M1 (P x 350): белки Чунцина -> 350 терминальных подпутей Reactome/GO;
-      - M2 (350 x 120): 350 подпутей -> 120 промежуточных процессов;
-      - M3 (120 x 35): 120 процессов -> 35 функциональных каскадов;
-      - M4 (35 x 6): 35 каскадов -> 6 макро-путей статьи Zhao et al.
-    """
+    """Генерирует 4-уровневые разреженные булевы маски иерархии путей для BINN / P-NET и DeepSHAP."""
     n_prot = len(protein_names)
     n_macro = len(MACRO_PATHWAYS_6)
 
-    # Распределение узлов каждого слоя по 6 макро-путям
     l3_to_l4 = np.array([i % n_macro for i in range(n_layer3)], dtype=np.int64)
     l2_to_l3 = np.array([i % n_layer3 for i in range(n_layer2)], dtype=np.int64)
     l1_to_l2 = np.array([i % n_layer2 for i in range(n_layer1)], dtype=np.int64)
@@ -613,7 +568,6 @@ def build_binn_hierarchy_masks(
     m4 = np.zeros((n_layer3, n_macro), dtype=bool)
     for i3, im in enumerate(l3_to_l4):
         m4[i3, im] = True
-        # Добавляем перекрестную регуляторную связь со смежным каскадом
         m4[i3, (im + 1) % n_macro] = (i3 % 3) == 0
 
     m3 = np.zeros((n_layer2, n_layer3), dtype=bool)
@@ -637,7 +591,6 @@ def build_binn_hierarchy_masks(
     edge_rows: list[dict[str, str | int]] = []
     for p_idx, gene in enumerate(protein_names):
         pw_name, is_sec, is_ecm = classify_gene_pathway_and_location(gene)
-        # Детерминированный хеш гена для воспроизводимой привязки к терминальным подпутям Reactome
         h_val = int(hashlib.md5(gene.encode("utf-8")).hexdigest()[:8], 16)
 
         if pw_name in macro_to_idx:
@@ -651,7 +604,6 @@ def build_binn_hierarchy_masks(
         m1[p_idx, c1] = True
         m1[p_idx, c2] = True
 
-        # Если белок секретируемый или матриксный, связываем дополнительно с ECM / Immune подпутем
         if is_ecm:
             ecm_pool = macro_l1_pools[0]
             m1[p_idx, int(ecm_pool[h_val % len(ecm_pool)])] = True
@@ -712,10 +664,8 @@ def run_blocks_v_g(
     root = locate("lab.db").parent if data_dir is None else Path(data_dir)
     target_genes = list(CURATED_UNIPROT_KNOWLEDGE.keys())
 
-    # 1. Запрос графа STRING-DB v12.0 по ключевым маркерам
     ppi_df = fetch_string_ppi_network(target_genes)
 
-    # 2. Формирование таблицы приоров UniProt + 6D MS Evidence и полнопротеомной таблицы (2699 белков)
     with sqlite3.connect(root / "lab.db") as conn:
         priors_df = build_full_priors_table(conn, target_genes)
         full_proteome_priors = build_full_proteome_priors(conn)
@@ -725,7 +675,6 @@ def run_blocks_v_g(
         )
         ppi_df.to_sql("string_ppi_edges", conn, if_exists="replace", index=False)
 
-    # 3. Экспорт базовых файлов приоров и PPI
     priors_df.to_parquet(root / "protein_priors.parquet")
     priors_df.to_csv(root / "protein_priors.csv")
     full_proteome_priors.to_parquet(root / "proteome_priors_2699.parquet")
@@ -733,7 +682,6 @@ def run_blocks_v_g(
     ppi_df.to_parquet(root / "ppi_network_edges.parquet", index=False)
     ppi_df.to_csv(root / "ppi_network_edges.csv", index=False)
 
-    # 4. Построение мультиплексного графа (Чунцин + STRING), проекций 6 путей и масок BINN
     with contextlib.suppress(OSError, sqlite3.Error, ValueError, KeyError):
         disc_path = root / "discovery_wide.parquet"
         if disc_path.is_file():
@@ -760,7 +708,6 @@ def run_blocks_v_g(
             np.savez_compressed(root / "binn_hierarchy_masks.npz", **masks_dict)
             masks_table.to_parquet(root / "binn_hierarchy_masks.parquet", index=False)
 
-            # Проекция 6 биологических макро-путей в обогащенную таблицу 426 пациенток
             excel_path = root / "Extended Data Fig 5.xlsx"
             if excel_path.is_file():
                 df_a = load_markers(

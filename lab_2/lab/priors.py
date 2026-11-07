@@ -1,7 +1,5 @@
 """Априорные биофизические знания UniProt и 6-мерный вектор приборной достоверности MS/MS."""
 
-from __future__ import annotations
-
 import io
 import json
 import re
@@ -18,7 +16,6 @@ from scipy import stats
 
 DEFAULT_CORE_GENES = ["LUM", "AMBP", "B2M", "FN1", "TIMP1"]
 
-# Расширенная база знаний UniProt KB по 5 ядерным маркерам и ключевым белкам 6 путей статьи Zhao et al.
 BIOPHYSICAL_PRIORS: dict[str, dict[str, Any]] = {
     "LUM": {
         "uniprot_id": "P51884",
@@ -262,7 +259,6 @@ BIOPHYSICAL_PRIORS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Структурные правила HGNC для автоматического маппинга всех 2 699 белков на 6 макро-путей Zhao et al.
 PATHWAY_GENE_PATTERNS: list[tuple[str, re.Pattern[str], int, int]] = [
     (
         "Complement_Cascade",
@@ -395,10 +391,7 @@ def fetch_uniprot_bulk_tsv(
     timeout: int = 12,
     cache_path: Path | str | None = None,
 ) -> pd.DataFrame:
-    """Пакетно скачивает биофизические аннотации UniProt для сотен/тысяч белков (по 350 за 1 HTTP-запрос).
-
-    Если указан cache_path и файл уже существует, мгновенно загружает данные из локального кэша.
-    """
+    """Пакетно скачивает биофизические аннотации UniProt для сотен/тысяч белков (по 350 за 1 HTTP-запрос)."""
     if cache_path is not None and Path(cache_path).is_file():
         return pd.read_parquet(cache_path)
 
@@ -487,11 +480,7 @@ def compute_ms_evidence_vectors(
     genes: list[str] | None = None,
     min_transitions: int = 1,
 ) -> pd.DataFrame:
-    """Вычисляет 6-мерный вектор приборной достоверности MS/MS v_g ∈ [0,1]^6 и сводный вес E_g.
-
-    Учитывает Ограничение #1: при отсутствии в таблице transitions строк с decoy == 1
-    распределение приборного шума оценивается по FDR-хвосту QValue > 0.01 (259 559 строк).
-    """
+    """Вычисляет 6-мерный вектор приборной достоверности MS/MS v_g ∈ [0,1]^6 и сводный вес E_g."""
     info_df = pd.read_sql_query("PRAGMA table_info(transitions)", conn)
     if info_df.empty:
         return pd.DataFrame()
@@ -504,7 +493,6 @@ def compute_ms_evidence_vectors(
     has_file = "FileName" in cols
     has_pg = "ProteinGroup" in cols
 
-    # 1. Оценка параметров глобального шумового распределения (decoy == 1 ИЛИ QValue > 0.01)
     mu_noise_l, sd_noise_l = 0.35, 0.15
     mu_noise_s, sd_noise_s = 1.3, 0.5
     total_runs = 213
@@ -533,7 +521,6 @@ def compute_ms_evidence_vectors(
             m_q = max(float(noise_df["mean_q"].iloc[0]), 1e-6)
             mu_noise_s = float(-np.log10(m_q))
 
-    # 2. Формирование SQL-условия фильтрации генов
     where_clauses = ["Genes IS NOT NULL", "decoy = 0"]
     params: list[Any] = []
     if genes is not None:
@@ -547,7 +534,6 @@ def compute_ms_evidence_vectors(
         where_clauses.append("QValue <= 0.01")
     where_sql = " AND ".join(where_clauses)
 
-    # 3. Если доступны все колонки DIA-NN, выполняем двухступенчатую агрегацию с межпрогонной дисперсией RT
     if has_qval and has_prot and has_frag and has_file and has_pg:
         pgq_expr = "PGQValue" if has_pgqval else "QValue"
         sql = f"""
@@ -597,7 +583,6 @@ def compute_ms_evidence_vectors(
         """
         df = pd.read_sql_query(sql, conn, params=params)
     else:
-        # Упрощенный fallback для синтетических таблиц в юнит-тестах
         pg_select = (
             "MAX(ProteinGroup) AS protein_group,"
             if has_pg
@@ -658,7 +643,6 @@ def compute_ms_evidence_vectors(
             ]
         ).set_index("gene")
 
-    # 4. Векторизованный расчет 6 компонент вектора приборной достоверности v_g ∈ [0, 1]^6
     n_pep_total = df["unique_peptides"].to_numpy(dtype=np.float64)
     n_pep_prot = (
         df["prot_confident_peptides"]
@@ -675,7 +659,6 @@ def compute_ms_evidence_vectors(
     n_tr_bar = df["mean_weighted_tr_per_run"].fillna(4.0).to_numpy(dtype=np.float64)
     v2 = np.clip(n_tr_bar / (n_tr_bar + 6.0), 0.0, 1.0)
 
-    # Используем Series для fillna (исправление ошибки Pandas 2.0 CoW с ndarray)
     eps_q = 1e-6
     s_min_q = df["min_qvalue"].fillna(0.01)
     s_avg_q = df["mean_qvalue"].fillna(0.01)
@@ -717,7 +700,6 @@ def compute_ms_evidence_vectors(
     sigma0_sq = max(float(np.nanmedian(rt_var)) * 2.5, 0.25)
     v6 = np.clip(np.exp(-rt_var / sigma0_sq), 0.0, 1.0)
 
-    # 5. Сводный геометрический вес достоверности E_g = prod max(v_{g,m}, 0.05)^{w_m}
     weights_w = np.array([0.20, 0.15, 0.20, 0.15, 0.15, 0.15], dtype=np.float64)
     v_mat = np.column_stack([v1, v2, v3, v4, v5, v6])
     v_clipped = np.maximum(v_mat, 0.05)
@@ -862,13 +844,7 @@ def build_full_proteome_priors(
     fetch_online_batch: bool = False,
     cache_path: Path | str | None = None,
 ) -> pd.DataFrame:
-    """Строит полную таблицу приоров для ВСЕХ 2 699 белков Чунцина (и/или 11 032 генов).
-
-    Объединяет:
-      1. 6-мерный вектор достоверности MS/MS (v1..v6, E_g) из transitions;
-      2. Курированные данные UniProt + пакетную докачку fetch_uniprot_bulk_tsv (при включенном флаге);
-      3. Автономную классификацию по 6 макро-путям статьи Zhao et al. и эмпирическую массу пептидов.
-    """
+    """Строит полную таблицу приоров для ВСЕХ 2 699 белков Чунцина (и/или 11 032 генов)."""
     prot_df = pd.read_sql_query(
         "SELECT Protein_Group, Genes, Protein_Names FROM proteins", conn
     )
@@ -884,7 +860,6 @@ def build_full_proteome_priors(
         ev_df.drop(columns=["protein_group"], errors="ignore"), how="left"
     )
 
-    # Опциональная пакетная докачка из UniProt REST API (по 350 белков за запрос)
     online_map: dict[str, dict[str, Any]] = {}
     if fetch_online_batch:
         bulk_df = fetch_uniprot_bulk_tsv(
@@ -928,7 +903,6 @@ def build_full_proteome_priors(
             pathways.append(pw)
             is_sec_list.append(sec_f)
             is_ecm_list.append(ecm_f)
-            # Эмпирическая оценка покрытой длины и массы по числу триптических пептидов
             est_len = int(max(110, min(2500, n_peps[idx] * 24 + 80)))
             len_list.append(est_len)
             mass_list.append(round(est_len * 0.11, 1))

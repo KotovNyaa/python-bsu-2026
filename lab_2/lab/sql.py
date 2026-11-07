@@ -1,7 +1,5 @@
 """Аналитические SQL-запросы к базе данных (выборки, группировки, окна, CASE)."""
 
-from __future__ import annotations
-
 import sqlite3
 
 import pandas as pd
@@ -42,12 +40,7 @@ def group_trans_by_gene(conn: sqlite3.Connection, limit: int = 10) -> pd.DataFra
 
 
 def decoy_stats(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Сравнивает достоверные мишени и шумовой хвост (Target vs Decoy / FDR > 0.01).
-
-    Учитывает физическую особенность выгрузки DIA-NN (Ограничение #1):
-    если строк с decoy = 1 физически 0, но присутствует колонка QValue,
-    шумовой хвост формируется по критерию QValue > 0.01 (259 559 переходов).
-    """
+    """Сравнивает достоверные мишени и шумовой хвост (Target vs Decoy / FDR > 0.01)."""
     info_df = pd.read_sql_query("PRAGMA table_info(transitions)", conn)
     col_names = set(info_df["name"].astype(str).tolist())
 

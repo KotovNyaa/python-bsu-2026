@@ -1,7 +1,5 @@
 """Модуль визуализации данных (гистограммы, boxplot, тепловая карта, вулкан, барплот, FDR-хвост)."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import matplotlib
@@ -260,7 +258,6 @@ def decoy(
         label_0 = "Target (decoy = 0)"
         label_1 = "Decoy (decoy = 1)"
     elif "QValue" in df_trans.columns:
-        # Учет ограничения #1: разделение по порогу DIA-NN 1% FDR (QValue <= 0.01 vs QValue > 0.01)
         t0 = df_trans[df_trans["QValue"] <= 0.01]["LibraryIntensity"].dropna()
         t1 = df_trans[df_trans["QValue"] > 0.01]["LibraryIntensity"].dropna()
         label_0 = "Confident Target (QValue <= 0.01)"

@@ -1,7 +1,5 @@
 """Управление реляционной базой данных SQLite со строгой схемой."""
 
-from __future__ import annotations
-
 import contextlib
 import sqlite3
 from collections.abc import Iterator
@@ -39,11 +37,8 @@ def populate_matrix(conn: sqlite3.Connection, path: Path | str | None = None) ->
     df = load_matrix(path)
     df.columns = [clean(c) for c in df.columns]
 
-    # Гарантируем уникальность первичного ключа Protein_Group
     df = df.drop_duplicates(subset=["Protein_Group"], keep="first").copy()
 
-    # Учет ограничения #3: если Genes изначально пуст, подставляем Protein_Group после обогащения,
-    # но при создании схемы фиксируем строгие типы полей и PRIMARY KEY
     sample_cols = [c for c in df.columns if c.startswith("PTB_")]
     meta_cols = [c for c in df.columns if c not in sample_cols]
 
@@ -163,7 +158,6 @@ def enrich(conn: sqlite3.Connection) -> int:
     )
     enriched_count = cur.rowcount
 
-    # Учет ограничения #3: для 48 белков без маппинга в transitions присваиваем Genes = Protein_Group
     conn.execute(
         """
         UPDATE proteins

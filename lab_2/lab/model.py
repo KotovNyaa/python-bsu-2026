@@ -1,7 +1,5 @@
 """Машинное обучение, адаптация к сдвигу превалентности (Prior Shift) и дистилляция в Чунцин."""
 
-from __future__ import annotations
-
 import contextlib
 import sqlite3
 from itertools import combinations
@@ -113,7 +111,6 @@ def estimate_prior_saerens_em(
 
     pi_tr = float(np.clip(pi_train, 0.02, 0.98))
     pi_est = pi_tr
-    # Слабый априорный псевдосчет Дирихле (alpha = 2.0) предотвращает вырождение на границах 0/1
     alpha_reg = 2.0
 
     for _ in range(max_iter):
